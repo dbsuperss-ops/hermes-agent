@@ -329,18 +329,31 @@ def should_bypass_proxy(target_hosts: str | list[str] | tuple[str, ...] | set[st
         for host, port in map(_split_host_port, map(str, candidates)))
 
 
+def _proxy_env(name: str) -> str:
+    """Proxy env read for the profile being served. Under a multiplexer the process environ is the
+    LAUNCH profile's, so a plain read would route a secondary's traffic through the default's proxy;
+    ``get_secret`` reads the routed profile's ``.env`` and misses fail closed. Unscoped (single
+    profile, or the default profile of a multiplexer): the process env, as before."""
+    from agent.secret_scope import UnscopedSecretError, get_secret
+    try:
+        value = get_secret(name)
+    except UnscopedSecretError:
+        value = os.environ.get(name)
+    return (value or "").strip()
+
+
 def resolve_proxy_url(
     platform_env_var: str | None = None, *,
     target_hosts: str | list[str] | tuple[str, ...] | set[str] | None = None) -> str | None:
     """Proxy URL: *platform_env_var* (e.g. ``DISCORD_PROXY``) first, then HTTPS_PROXY /
     HTTP_PROXY / ALL_PROXY (any case), then the macOS system proxy — the latter two only when
     ``gateway.trust_env`` is true. None when nothing is found or NO_PROXY matches a target."""
-    value = (os.environ.get(platform_env_var) or "").strip() if platform_env_var else ""
+    value = _proxy_env(platform_env_var) if platform_env_var else ""
     if not value:
         if not gateway_trust_env():  # only the explicit per-platform var is honored
             return None
         keys = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "https_proxy", "http_proxy", "all_proxy")
-        value = next((v for k in keys if (v := (os.environ.get(k) or "").strip())), "")
+        value = next((v for k in keys if (v := _proxy_env(k))), "")
     proxy = normalize_proxy_url(value or _detect_macos_system_proxy())
     return None if proxy and should_bypass_proxy(target_hosts) else proxy
 
